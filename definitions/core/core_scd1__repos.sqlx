@@ -1,0 +1,65 @@
+config {
+  type: "incremental",
+  description: "Repository dimension (conformed dimension). One row per repository. SCD Type 1, so no history is kept; only the latest attributes are retained. created_at is fixed to the first observed time, and updated_at only advances in batches where repo_name or repo_object_url actually changed. Same semantics as dw.core_scd1__repos on the dbt side.",
+  uniqueKey: ["repo_id"],
+  bigquery: {
+    clusterBy: ["repo_id"]
+  },
+  tags: ["core", "dim", "scd1"],
+  assertions: {
+    uniqueKey: ["repo_id"],
+    nonNull: ["repo_id", "repo_name", "created_at", "updated_at"],
+    rowConditions: ["created_at <= updated_at"]
+  },
+  columns: {
+    repo_id: "Numeric GitHub repository id. Grain of this table.",
+    repo_name: "owner/name (lowercased). Latest observed value.",
+    repo_object_url: "REST API URL. Latest observed value.",
+    created_at: "Event time when this repository was first seen. Must never move backward or forward.",
+    updated_at: "Event time of the last actual change to repo_name / repo_object_url. Re-observing the same values does not count as a change."
+  }
+}
+
+pre_operations {
+  ${utils.checkpointDeclare(incremental(), self(), "date(updated_at)")}
+}
+
+with
+
+tobe as (
+    select
+        repo_id,
+        repo_name,
+        repo_object_url,
+        created_at,
+    from
+        ${ref("stg_fact__events")}
+    where true
+        and created_date >= checkpoint_date
+        and repo_id is not null
+    qualify
+        row_number() over (
+            partition by repo_id
+            order by created_at desc, event_id desc
+        ) = 1
+)
+
+select
+    tobe.repo_id,
+    tobe.repo_name,
+    tobe.repo_object_url,
+    ${when(incremental(), `coalesce(asis.created_at, tobe.created_at) as created_at,`)}
+    ${when(incremental(), `
+    case
+        when asis.repo_id is null then tobe.created_at
+        when coalesce(asis.repo_name, '') != coalesce(tobe.repo_name, '') then tobe.created_at
+        when coalesce(asis.repo_object_url, '') != coalesce(tobe.repo_object_url, '') then tobe.created_at
+        else asis.updated_at
+    end as updated_at,
+    `)}
+    ${when(incremental(), ``, `tobe.created_at,`)}
+    ${when(incremental(), ``, `tobe.created_at as updated_at,`)}
+from
+    tobe
+    ${when(incremental(), `left join ${self()} as asis`)}
+        ${when(incremental(), `using (repo_id)`)}

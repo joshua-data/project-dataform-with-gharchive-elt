@@ -1,0 +1,32 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored; this example is not.
+#
+# In CI these three arrive as TF_VAR_* environment variables instead, with
+# github_repo bound to ${{ github.repository }}.
+
+project_id  = "joshua-data"
+region      = "asia-northeast3"
+github_repo = "joshua-data/project-dataform-with-gharchive-elt"
+
+# Secret created outside Terraform:
+#   printf '%s' "YOUR_GITHUB_TOKEN" | gcloud secrets create dataform-github-token \
+#     --project=joshua-data --replication-policy=automatic --data-file=-
+git_token_secret_id = "dataform-github-token"
+
+# Source spans 2026-06-01..2026-09-24 (116 days, 359,058,631 rows).
+# Start narrow; widen to "2026-06-01" and run once with
+# fully_refresh_incremental_tables = true when you want the full history.
+prod_stg_start_date             = "2026-09-01"
+prod_lookback_days              = "2"
+prod_freshness_hours            = "3"
+prod_completeness_lookback_days = "7"
+
+dev_table_expiration_days = 14
+
+# Release compiles at 00:30 UTC, workflow executes at 01:00 UTC.
+# The order matters: a workflow runs the release's latest compilation result.
+release_cron      = "30 0 * * *"
+workflow_cron     = "0 1 * * *"
+schedule_timezone = "Etc/UTC"
+
+workflow_disabled                = false
+fully_refresh_incremental_tables = false

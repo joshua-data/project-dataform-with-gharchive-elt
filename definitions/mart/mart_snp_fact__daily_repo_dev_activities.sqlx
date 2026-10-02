@@ -1,0 +1,101 @@
+config {
+  type: "incremental",
+  description: "Daily development activity snapshot per repository. One row per (repo_id, created_date) pair. Column names match dw.mart_snp_fact__daily_repo_dev_activities on the dbt side, so any column that shares a name must hold exactly the same value in both warehouses.",
+  uniqueKey: ["created_date", "repo_id"],
+  bigquery: {
+    partitionBy: "created_date",
+    clusterBy: ["repo_id"],
+    updatePartitionFilter: "created_date >= checkpoint_date"
+  },
+  tags: ["mart", "fact", "periodic-snapshot-fact"],
+  dependOnDependencyAssertions: true,
+  assertions: {
+    uniqueKey: ["created_date", "repo_id"],
+    nonNull: ["created_date", "repo_id"],
+    rowConditions: ["counted_unique_users_count <= counted_events_count"]
+  },
+  columns: {
+    created_date: "Activity date (UTC). Partition key.",
+    repo_id: "Numeric GitHub repository id.",
+    repo_name: "owner/name. Joined from core_scd1__repos. Extra column not present in the dbt mart.",
+    counted_events_count: "Total of the 5 event types counted below. Note: intentionally named differently from dbt's all_events_count. dbt counts all 16 event types while this table counts only 5, so a shared name would lead to silently wrong comparisons.",
+    counted_unique_users_count: "Number of distinct actors across the 5 event types. Note: named differently from dbt's unique_users_count for the same reason as above.",
+    pushes_count: "Number of push_event rows.",
+    prs_opened_count: "pull_request_event rows where action = 'opened'.",
+    prs_merged_closed_count: "pull_request_event rows where action = 'merged'. PRs closed by merging.",
+    prs_unmerged_closed_count: "pull_request_event rows where action = 'closed'. PRs closed without merging.",
+    prs_total_closed_count: "Rows where action is 'merged' or 'closed'. Sum of the two above.",
+    issues_opened_count: "issues_event rows where action = 'opened'.",
+    issues_closed_count: "issues_event rows where action = 'closed'.",
+    watches_count: "Number of watch_event rows. This is a GitHub star.",
+    forks_count: "Number of fork_event rows. Rows with an empty repo_id are excluded."
+  }
+}
+
+pre_operations {
+  ${utils.checkpointDeclare(incremental(), self(), "created_date")}
+}
+
+with
+
+fact as (
+    select created_date, repo_id, user_id, event_name, cast(null as string) as action,
+    from ${ref("core_fact__push_events")}
+    where created_date >= checkpoint_date and repo_id is not null
+
+    union all
+    select created_date, repo_id, user_id, event_name, action,
+    from ${ref("core_fact__pull_request_events")}
+    where created_date >= checkpoint_date and repo_id is not null
+
+    union all
+    select created_date, repo_id, user_id, event_name, action
+    from ${ref("core_fact__issues_events")}
+    where created_date >= checkpoint_date and repo_id is not null
+
+    union all
+    select created_date, repo_id, user_id, event_name, action
+    from ${ref("core_fact__watch_events")}
+    where created_date >= checkpoint_date and repo_id is not null
+
+    union all
+    select created_date, repo_id, user_id, event_name, action
+    from ${ref("core_fact__fork_events")}
+    where created_date >= checkpoint_date and repo_id is not null
+),
+
+dim as (
+    select
+        repo_id,
+        repo_name,
+    from
+        ${ref("core_scd1__repos")}
+)
+
+select
+    -- Grain
+    f.created_date,
+    f.repo_id,
+    any_value(d.repo_name) as repo_name,
+    -- Summary stats
+    count(1) as counted_events_count,
+    count(distinct f.user_id) as counted_unique_users_count,
+    -- push
+    countif(f.event_name = 'push_event') as pushes_count,
+    -- pull request
+    countif(f.event_name = 'pull_request_event' and f.action = 'opened') as prs_opened_count,
+    countif(f.event_name = 'pull_request_event' and f.action = 'merged') as prs_merged_closed_count,
+    countif(f.event_name = 'pull_request_event' and f.action = 'closed') as prs_unmerged_closed_count,
+    countif(f.event_name = 'pull_request_event' and f.action in ('merged', 'closed')) as prs_total_closed_count,
+    -- issue
+    countif(f.event_name = 'issues_event' and f.action = 'opened') as issues_opened_count,
+    countif(f.event_name = 'issues_event' and f.action = 'closed') as issues_closed_count,
+    -- engagements
+    countif(f.event_name = 'watch_event') as watches_count,
+    countif(f.event_name = 'fork_event') as forks_count,
+from
+    fact as f
+    left join dim as d
+        using (repo_id)
+group by
+    all

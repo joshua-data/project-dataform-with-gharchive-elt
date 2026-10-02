@@ -1,0 +1,30 @@
+# Dataform
+node_modules/
+.df-credentials.json
+.dataform/
+definitions/**/*.js.map
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+tfplan
+
+# GCP credentials
+*-key.json
+service-account*.json
+gcp-credentials*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store

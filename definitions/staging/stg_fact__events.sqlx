@@ -1,0 +1,78 @@
+config {
+  type: "incremental",
+  description: "GH Archive 이벤트 1건 = 1행. JSON 문자열 안의 actor / repo / org 를 타입이 있는 컬럼으로 펼치고, 재수집으로 생긴 중복 행을 하나로 접습니다. dbt 쪽 dw.stg_fact__events 와 컬럼명·정제 규칙이 동일합니다.",
+  uniqueKey: ["event_id"],
+  bigquery: {
+    partitionBy: "created_date",
+    clusterBy: ["event_name", "repo_id"],
+    updatePartitionFilter: "created_date >= checkpoint_date"
+  },
+  tags: ["stg", "fact", "transactional-fact"],
+  assertions: {
+    uniqueKey: ["event_id"],
+    nonNull: ["event_id", "event_name", "created_date", "user_id", "user_name", "payload", "is_public"],
+    rowConditions: ["created_date = date(created_at)"]
+  },
+  columns: {
+    event_id: "GitHub event id. The source contains exact duplicate rows, so QUALIFY keeps only one.",
+    event_name: "Event type normalized to snake_case. PushEvent -> push_event.",
+    created_date: "Date the event occurred (UTC). Partition key. Taken as-is from the source's Hive partition column dt.",
+    created_at: "Timestamp the event occurred (UTC).",
+    ingested_date: "Date the ingest job wrote the record to GCS.",
+    ingested_at: "Timestamp the ingest job wrote the record to GCS. Used to keep the latest row during deduplication.",
+    user_id: "Actor's numeric GitHub id.",
+    user_name: "Actor handle (lowercased). Safe to use as a join key.",
+    user_display_name: "Actor handle (original casing preserved). For display.",
+    user_object_url: "Actor's REST API URL.",
+    user_image_url: "Actor's avatar URL.",
+    repo_id: "Repository's numeric GitHub id. NULL on fork_event rows where the repo object is empty.",
+    repo_name: "owner/name (lowercased).",
+    repo_object_url: "Repository's REST API URL.",
+    org_id: "Organization's numeric GitHub id. NULL for non-organization events.",
+    org_name: "Organization handle (lowercased).",
+    org_object_url: "Organization's REST API URL.",
+    org_image_url: "Organization's avatar URL.",
+    payload: "Event-specific details. The source STRING parsed into the BigQuery JSON type.",
+    is_public: "Whether the event is public."
+  }
+}
+
+pre_operations {
+  ${utils.checkpointDeclare(incremental(), self(), "created_date")}
+}
+
+select
+    id as event_id,
+    lower(regexp_replace(nullif(trim(type), ''), r'([a-z])([A-Z])', r'\1_\2')) as event_name,
+
+    dt as created_date,
+    datetime(safe_cast(created_at as timestamp)) as created_at,
+    date(safe_cast(ingested_at as timestamp)) as ingested_date,
+    datetime(safe_cast(ingested_at as timestamp)) as ingested_at,
+
+    ${utils.jsonInt("actor", "id")} as user_id,
+    ${utils.jsonLower("actor", "login")} as user_name,
+    ${utils.jsonString("actor", "display_login")} as user_display_name,
+    ${utils.jsonString("actor", "url")} as user_object_url,
+    ${utils.jsonString("actor", "avatar_url")} as user_image_url,
+
+    ${utils.jsonInt("repo", "id")} as repo_id,
+    ${utils.jsonLower("repo", "name")} as repo_name,
+    ${utils.jsonString("repo", "url")} as repo_object_url,
+
+    ${utils.jsonInt("org", "id")} as org_id,
+    ${utils.jsonLower("org", "login")} as org_name,
+    ${utils.jsonString("org", "url")} as org_object_url,
+    ${utils.jsonString("org", "avatar_url")} as org_image_url,
+
+    safe.parse_json(payload) as payload,
+    public as is_public,
+from
+    ${ref("ext__events")}
+where true
+    and dt >= checkpoint_date
+qualify
+    row_number() over (
+        partition by id
+        order by ingested_at desc
+    ) = 1

@@ -1,0 +1,64 @@
+config {
+  type: "table",
+  description: "Top 100 repositories by stars received over the 7 days leading up to the latest date present in the data.",
+  tags: ["mart", "fact"],
+  assertions: {
+    nonNull: ["star_rank", "repo_id"],
+    rowConditions: ["stargazers_7d <= stars_7d"]
+  },
+  columns: {
+    star_rank: "RANK() by stars_7d descending. Ties share the same rank.",
+    repo_id: "Numeric GitHub repository id.",
+    repo_name: "owner/name (lowercased). Joined from core_scd1__repos.",
+    stars_7d: "Number of watch_event rows in the window. If the same user stars twice, it counts as 2.",
+    stargazers_7d: "Number of distinct users in the window."
+  }
+}
+
+with
+
+bounds as (
+    select
+        max(created_date) as max_date,
+    from
+        ${ref("core_fact__watch_events")}
+),
+
+agg__repos as (
+    select
+        f.repo_id,
+        count(1) as stars_7d,
+        count(distinct f.user_id) as stargazers_7d,
+    from
+        ${ref("core_fact__watch_events")} as f
+        cross join bounds as b
+    where true
+        and f.created_date >= date_sub(b.max_date, interval 7 day)
+    group by
+        all
+),
+
+dim__repos as (
+    select
+        repo_id,
+        repo_name,
+    from
+        ${ref("core_scd1__repos")}
+)
+
+select
+    row_number() over (
+        order by agg.stars_7d desc, agg.stargazers_7d desc
+    ) as star_rank,
+    agg.repo_id,
+    d.repo_name,
+    agg.stars_7d,
+    agg.stargazers_7d,
+from
+    agg__repos as agg
+    left join dim__repos as d
+        using (repo_id)
+qualify
+    star_rank <= 100
+order by
+    1, 2

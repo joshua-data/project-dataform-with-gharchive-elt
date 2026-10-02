@@ -1,0 +1,7 @@
+config {
+  type: "declaration",
+  database: "joshua-data",
+  schema: "raw__gharchive",
+  name: "ext__events",
+  description: "GH Archive events as an external table over Parquet in gs://joshua-data-gharchive/events/, hive-partitioned on dt (DATE) and hr (INT64). Loaded hourly by the Cloud Run job in project-gharchive-elt. actor, repo, org and payload are JSON held in STRING columns; created_at and ingested_at are ISO 8601 strings."
+}

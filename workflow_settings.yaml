@@ -1,0 +1,15 @@
+defaultProject: joshua-data
+defaultLocation: asia-northeast3
+
+defaultDataset: dw_dataform
+defaultAssertionDataset: dw_dataform
+
+dataformCoreVersion: 3.0.71
+
+vars:
+  env: dev
+
+  stgStartDate: "2026-09-01"
+  lookbackDays: "2"
+  freshnessHours: "3"
+  completenessLookbackDays: "7"
