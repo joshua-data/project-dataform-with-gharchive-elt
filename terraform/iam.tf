@@ -92,6 +92,12 @@ resource "google_service_account_iam_member" "ci_acts_as_runner" {
   role               = "roles/iam.serviceAccountUser"
 }
 
+resource "google_storage_bucket_iam_member" "ci_raw_bucket_roles" {
+  bucket = local.gharchive_bucket_name
+  member = local.dataform_ci_sa_email
+  role   = "roles/storage.legacyBucketOwner"
+}
+
 resource "google_storage_bucket_iam_member" "ci_tfstate" {
   bucket = "${var.project_id}-gharchive-tfstate"
   member = local.dataform_ci_sa_email
